@@ -1,0 +1,69 @@
+# Build outputs
+build/
+dist/
+*.o
+*.a
+*.so
+*.so.*
+*.dylib
+cmake-build-*/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# CMake / Make
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile.in
+compile_commands.json
+
+# CUDA
+*.cubin
+*.ptx
+*.fatbin
+
+# Models and weights (never commit)
+models/
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.onnx
+*.engine
+*.plan
+
+# Logs and run artifacts
+*.log
+logs/
+runs/
+results/
+outputs/
+checkpoints/
+wandb/
+
+# Data
+data/
+datasets/
+downloads/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
