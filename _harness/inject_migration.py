@@ -84,6 +84,10 @@ def main() -> int:
                     choices=["enabled", "static", "greedy", "oracle"],
                     help="greedy accepts every injected command; enabled needs "
                          "online estimates that an injected command cannot supply")
+    ap.add_argument("--allow-scheduler", action="store_true",
+                    help="let the dynamic TPOT scheduler also emit PP commands; "
+                         "off by default so the measured bytes belong to our "
+                         "injection alone")
     ap.add_argument("--out", default="results/inject")
     ap.add_argument("--timeout", type=float, default=240.0)
     args = ap.parse_args()
@@ -106,6 +110,13 @@ def main() -> int:
     # injection time) would reject every command. "greedy" accepts what is asked
     # for and is the documented experiment-only bypass.
     env["EDGEVISOR_JIT_MODE"] = args.jit_mode
+    # Keep the dynamic TPOT scheduler from issuing its own PP commands. Without
+    # this it races our injection: the first apply honours layerCount, then the
+    # scheduler emits a six-layer command of its own, and the measured bytes
+    # belong to whichever finished last. An unreachable gain threshold silences
+    # it while leaving the plan UDS available for our command.
+    if not args.allow_scheduler:
+        env["DLLAMA_TPOT_MIN_PP_GAIN_MS"] = "1000000000"
 
     print("starting workers…", flush=True)
     workers = []
