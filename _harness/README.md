@@ -62,8 +62,8 @@ python3 inject_migration.py \
 
 ## Known open item
 
-The byte accounting does not reconcile yet: migrating one layer over 41
-positions reports 4.05 MB where the model geometry implies about 328 KiB, and
-`binding_update_count` reports 6 for a `layerCount` of 1. Until this is
-resolved, treat `state_transfer_bytes` as a relative indicator, not an absolute
-quantity. Tracked in `../P0-report.md` section 7.
+Byte accounting is resolved — see `../P0-addendum-byte-accounting.md`. The
+original 4.05 MB figure was six layers emitted by the dynamic scheduler racing
+the injected command, not a bookkeeping defect. Always run with the scheduler
+suppressed (the default here) and quote the layer count alongside any byte
+figure.
