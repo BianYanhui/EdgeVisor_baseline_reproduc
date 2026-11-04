@@ -10,6 +10,7 @@ sweeps runs inside a container.
 | --- | --- |
 | `measure_migration.py` | Runs a 4-stage pipeline on local GPUs and records the ablation events EdgeVisor emits. Produces `summary.json`. |
 | `inject_migration.py` | Drives one PP migration at a fixed token position through the root's plan UDS. Used because the dynamic scheduler never fires on four identical GPUs. |
+| `pipelive_pair.py` | Compares stop-and-copy, idle-window pre-copy, and decode-time KV patching at the same trigger. |
 
 ## Testbed assumptions
 
