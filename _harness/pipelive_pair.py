@@ -43,6 +43,7 @@ SCRUB = (
     "DLLAMA_TPOT_MIN_PP_GAIN_MS",
     "EDGEVISOR_JIT_MODE",
     "EDGEVISOR_ABLATION_LOG_PATH",
+    "DLLAMA_IGNORE_EOS",
 )
 
 
@@ -129,14 +130,19 @@ def parse_root(log_path: pathlib.Path) -> dict:
     }
 
 
-def write_episode(path: pathlib.Path, prompt: str) -> None:
-    # Prefill lands at position 20. Tool replay inserts extra tokens, so the
-    # trigger at 80 falls during the second tool replay, after the wait that
-    # copied through position 77.
+def write_episode(path: pathlib.Path, prompt: str, gen_tokens) -> None:
+    # One line. The episode parser treats a newline as a new record.
+    if "\n" in prompt or "\t" in prompt:
+        raise ValueError("episode prompt must be a single line without tabs")
     lines = [f"PROMPT\t{prompt}"]
-    rounds = [(20, 20), (20, 20), (20, 30), (20, 10), (20, 10)]
-    for index, (wait_ms, gen_tokens) in enumerate(rounds, start=1):
-        lines.append(f"ROUND\t{wait_ms}\t{gen_tokens}\ttool result {index}")
+    if gen_tokens is None:
+        # Short prompt: prefill ends near 20, and the second tool replay
+        # crosses a trigger at 80 after the wait that copied through 77.
+        gen_tokens = (20, 20, 30, 10, 10)
+    if len(gen_tokens) != 5:
+        raise ValueError("episode needs exactly five generation lengths")
+    for index, ntok in enumerate(gen_tokens, start=1):
+        lines.append(f"ROUND\t20\t{int(ntok)}\ttool result {index}")
     path.write_text("\n".join(lines) + "\n")
 
 
@@ -160,11 +166,13 @@ def run_arm(label: str, mode: str, args, out_dir: pathlib.Path) -> dict:
         "DLLAMA_PIPELIVE_CHUNK": str(args.chunk),
         "DLLAMA_PIPELIVE_TAU": str(args.tau),
     })
+    if args.ignore_eos and mode != "idle":
+        env["DLLAMA_IGNORE_EOS"] = "1"
     if mode == "pipelive":
         env["DLLAMA_PIPELIVE_PATCH"] = "1"
     elif mode == "idle":
         episode = run_dir / "episode.txt"
-        write_episode(episode, args.prompt)
+        write_episode(episode, args.prompt, args.idle_gen)
         env["DLLAMA_BACKGROUND_PRECOPY"] = "1"
         env["DLLAMA_EPISODE_SCRIPT"] = str(episode)
     elif mode != "stop":
@@ -194,7 +202,7 @@ def run_arm(label: str, mode: str, args, out_dir: pathlib.Path) -> dict:
         str(DLLAMA), "inference",
         "--model", args.model, "--tokenizer", args.tokenizer,
         "--prompt", args.prompt, "--steps", str(args.steps),
-        "--max-seq-len", "2048", "--nthreads", "8", "--gpu-index", "0",
+        "--max-seq-len", str(args.max_seq_len), "--nthreads", "8", "--gpu-index", "0",
         "--workers", *[f"127.0.0.1:{BASE_PORT + i}" for i in range(N_STAGES - 1)],
         "--ratios", ratios, "--verbose", "--auto",
     ]
@@ -204,7 +212,7 @@ def run_arm(label: str, mode: str, args, out_dir: pathlib.Path) -> dict:
     root = subprocess.Popen(cmd, env=env, stdout=root_log, stderr=subprocess.STDOUT)
     injected: dict = {}
     try:
-        if not wait_for_socket(PLAN_SOCK, timeout_s=180):
+        if not wait_for_socket(PLAN_SOCK, timeout_s=300):
             print(f"[{label}] plan socket never appeared", file=sys.stderr)
         else:
             req = {
@@ -288,7 +296,14 @@ def main() -> int:
     ap.add_argument("--model", required=True)
     ap.add_argument("--tokenizer", required=True)
     ap.add_argument("--prompt", default="Explain the history and construction of the Eiffel Tower.")
+    ap.add_argument("--prompt-file", default="",
+                    help="read the prompt from a file; newlines are flattened to spaces")
     ap.add_argument("--steps", type=int, default=120)
+    ap.add_argument("--max-seq-len", type=int, default=2048)
+    ap.add_argument("--ignore-eos", action="store_true",
+                    help="keep decoding until --steps on the stop and pipelive arms")
+    ap.add_argument("--idle-gen", default="",
+                    help="five comma-separated generation lengths for the idle arm")
     ap.add_argument("--stage-size", type=int, default=9)
     ap.add_argument("--trigger-pos", type=int, default=80)
     ap.add_argument("--trigger-layer", type=int, default=8)
@@ -296,16 +311,33 @@ def main() -> int:
     ap.add_argument("--chunk", type=int, default=16)
     ap.add_argument("--tau", type=int, default=8)
     ap.add_argument("--timeout", type=float, default=420.0)
+    ap.add_argument("--arms", default="stop,idle,pipelive",
+                    help="comma-separated subset: stop, idle, pipelive")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
+    if args.prompt_file:
+        text = pathlib.Path(args.prompt_file).read_text()
+        args.prompt = " ".join(text.split())
+    if args.idle_gen:
+        parts = [int(part) for part in args.idle_gen.split(",") if part]
+        if len(parts) != 5:
+            raise SystemExit("--idle-gen needs five comma-separated lengths")
+        args.idle_gen = parts
+    else:
+        args.idle_gen = None
 
     out_dir = pathlib.Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    arms = [
-        run_arm("stop_and_copy", "stop", args, out_dir),
-        run_arm("idle_precopy", "idle", args, out_dir),
-        run_arm("pipelive", "pipelive", args, out_dir),
-    ]
+    selected = [part.strip() for part in args.arms.split(",") if part.strip()]
+    known = {
+        "stop": ("stop_and_copy", "stop"),
+        "idle": ("idle_precopy", "idle"),
+        "pipelive": ("pipelive", "pipelive"),
+    }
+    unknown = [name for name in selected if name not in known]
+    if unknown or not selected:
+        raise SystemExit(f"unknown --arms {unknown or selected}; choose stop, idle, pipelive")
+    arms = [run_arm(known[name][0], known[name][1], args, out_dir) for name in selected]
     (out_dir / "summary.json").write_text(json.dumps(arms, indent=2))
     print(json.dumps([{k: a.get(k) for k in (
         "label", "stall_time_ms", "state_transfer_bytes", "precopy_bytes",
